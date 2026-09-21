@@ -7,6 +7,7 @@ import ro.upb.mitmdetector.alert.ConsoleAlertListener;
 import ro.upb.mitmdetector.alert.FileAlertListener;
 import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
+import ro.upb.mitmdetector.detector.DnsDetector;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -27,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 public final class MitmDetectorApp {
 
     private static final long STATS_INTERVAL_SECONDS = 5;
-S
+
     private MitmDetectorApp() { }
 
     public static void main(String[] args) throws PcapNativeException, InterruptedException {
@@ -60,6 +61,7 @@ S
         }
 
         engine.addDetector(new ArpDetector(alerts));
+        engine.addDetector(new DnsDetector(alerts));
 
         Runtime.getRuntime().addShutdownHook(new Thread(engine::close));
         engine.start();

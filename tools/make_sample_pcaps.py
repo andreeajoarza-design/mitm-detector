@@ -6,8 +6,10 @@
 Output (overwritten on every run, no external libraries needed):
     src/test/resources/pcap/normal_arp.pcap
     src/test/resources/pcap/arp_spoofing.pcap
+    src/test/resources/pcap/normal_dns.pcap
+    src/test/resources/pcap/dns_spoofing.pcap
 
-Network in the captures: 192.168.1.0/24, gateway .1, victim .10, attacker .66.
+Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
 Timestamps are fixed (2026-01-01 10:00:00 UTC) so every run gives identical files.
 """
 import os
@@ -86,7 +88,92 @@ def spoofing_traffic():
     return packets
 
 
+# ---------------------------------------------------------------------------
+# DNS captures. Client 192.168.1.10 asks the resolver 192.168.1.1 (the gateway).
+# ---------------------------------------------------------------------------
+
+def dns_name(name):
+    return b"".join(bytes([len(label)]) + label.encode("ascii") for label in name.split(".")) + b"\x00"
+
+
+def dns_query(txid, name):
+    return struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0) + dns_name(name) + struct.pack("!HH", 1, 1)
+
+
+def dns_response(txid, name, addresses):
+    message = struct.pack("!HHHHHH", txid, 0x8180, 1, len(addresses), 0, 0)
+    message += dns_name(name) + struct.pack("!HH", 1, 1)
+    for address in addresses:
+        # name = pointer to the question (offset 12), type A, class IN, TTL 300, length 4
+        message += struct.pack("!HHHIH", 0xC00C, 1, 1, 300, 4) + ip(address)
+    return message
+
+
+def ipv4_checksum(header):
+    total = sum((header[i] << 8) + header[i + 1] for i in range(0, len(header), 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return (~total) & 0xFFFF
+
+
+def udp_frame(eth_src, eth_dst, src_ip, dst_ip, src_port, dst_port, payload):
+    udp = struct.pack("!HHHH", src_port, dst_port, 8 + len(payload), 0) + payload   # UDP checksum 0 = unused
+    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 0, 0, 64, 17, 0, ip(src_ip), ip(dst_ip))
+    header = header[:10] + struct.pack("!H", ipv4_checksum(header)) + header[12:]
+    frame = mac(eth_dst) + mac(eth_src) + struct.pack("!H", 0x0800) + header + udp
+    return frame + b"\x00" * max(0, 60 - len(frame))
+
+
+def client_port(txid):
+    return 40000 + (txid & 0x0FFF)
+
+
+def dns_query_packet(t, txid, name):
+    frame = udp_frame(VICTIM[1], GATEWAY[1], VICTIM[0], GATEWAY[0], client_port(txid), 53, dns_query(txid, name))
+    return (t, frame)
+
+
+def dns_answer_packet(t, txid, name, addresses, sender_mac=GATEWAY[1]):
+    """A response that claims to come from the resolver (192.168.1.1), sent by the machine with sender_mac."""
+    frame = udp_frame(sender_mac, VICTIM[1], GATEWAY[0], VICTIM[0], 53, client_port(txid),
+                      dns_response(txid, name, addresses))
+    return (t, frame)
+
+
+def lookup(t, txid, name, addresses):
+    return [dns_query_packet(t, txid, name), dns_answer_packet(t + 0.02, txid, name, addresses)]
+
+
+def normal_dns_traffic():
+    packets = []
+    packets += lookup(0, 0x1001, "www.example.com", ["198.51.100.7"])
+    packets += lookup(2, 0x1002, "intranet.local", ["192.168.1.50"])      # internal name, private address is normal
+    packets += lookup(10, 0x1003, "www.example.com", ["198.51.100.7"])
+    packets += lookup(20, 0x1004, "www.example.com", ["198.51.100.8"])    # address rotation between public addresses
+    packets += lookup(30, 0x1005, "www.example.com", ["198.51.100.7"])
+    packets.append(dns_answer_packet(30.04, 0x1005, "www.example.com", ["198.51.100.7"]))   # identical duplicate
+    packets += lookup(40, 0x1006, "intranet.local", ["192.168.1.50"])
+    return packets
+
+
+def dns_spoofing_traffic():
+    packets = []
+    # Two normal lookups, so the detector learns that the name resolves to a public address.
+    packets += lookup(0, 0x2001, "www.example.com", ["198.51.100.7"])
+    packets += lookup(10, 0x2002, "www.example.com", ["198.51.100.7"])
+    # t=30: the attacker answers the victim's query 3 ms after it is sent, before the real resolver
+    # (30 ms). The forged answer points the name to the attacker's own machine.
+    packets.append(dns_query_packet(30, 0x2003, "www.example.com"))
+    packets.append(dns_answer_packet(30.003, 0x2003, "www.example.com", [ATTACKER[0]], sender_mac=ATTACKER[1]))
+    packets.append(dns_answer_packet(30.030, 0x2003, "www.example.com", ["198.51.100.7"]))
+    # t=50: a forged answer for a name the victim never asked about.
+    packets.append(dns_answer_packet(50, 0x2BAD, "login.example.com", [ATTACKER[0]], sender_mac=ATTACKER[1]))
+    return packets
+
+
 if __name__ == "__main__":
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "resources", "pcap")
     write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "arp_spoofing.pcap")), spoofing_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "normal_dns.pcap")), normal_dns_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "dns_spoofing.pcap")), dns_spoofing_traffic())

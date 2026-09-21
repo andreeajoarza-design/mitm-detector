@@ -7,6 +7,7 @@ import ro.upb.mitmdetector.alert.AlertType;
 import ro.upb.mitmdetector.alert.Severity;
 import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
+import ro.upb.mitmdetector.detector.DnsDetector;
 
 import java.net.URISyntaxException;
 import java.nio.file.Path;
@@ -30,6 +31,7 @@ class PcapReplayTest {
         AlertManager alerts = new AlertManager();
         try (PacketCaptureEngine engine = PacketCaptureEngine.forFile(pathOf(resource))) {
             engine.addDetector(new ArpDetector(alerts));
+            engine.addDetector(new DnsDetector(alerts));
             engine.start();
             engine.awaitCompletion();
             assertTrue(engine.packetCount() > 0, "no packets were read from " + resource);
@@ -66,5 +68,36 @@ class PcapReplayTest {
         long floods = alerts.history().stream()
                 .filter(a -> a.type() == AlertType.ARP_UNSOLICITED_FLOOD).count();
         assertEquals(1, floods, "history: " + alerts.history());
+    }
+
+    @Test
+    void normalDnsTrafficProducesNoAlerts() throws Exception {
+        AlertManager alerts = replay("/pcap/normal_dns.pcap");
+        assertTrue(alerts.history().isEmpty(), "unexpected alerts: " + alerts.history());
+    }
+
+    @Test
+    void dnsSpoofingIsDetected() throws Exception {
+        AlertManager alerts = replay("/pcap/dns_spoofing.pcap");
+        assertEquals(3, alerts.history().size(), "history: " + alerts.history());
+
+        Alert changed = only(alerts, AlertType.DNS_ANSWER_CHANGED);
+        assertEquals(Severity.HIGH, changed.severity());
+        assertEquals(GATEWAY_IP, changed.sourceIp());
+        assertEquals(ATTACKER_MAC, changed.sourceMac());
+
+        Alert conflict = only(alerts, AlertType.DNS_CONFLICTING_RESPONSES);
+        assertEquals(Severity.CRITICAL, conflict.severity());
+        assertEquals(ATTACKER_MAC, conflict.sourceMac());
+
+        Alert unsolicited = only(alerts, AlertType.DNS_UNSOLICITED_RESPONSE);
+        assertEquals(Severity.MEDIUM, unsolicited.severity());
+        assertEquals(ATTACKER_MAC, unsolicited.sourceMac());
+    }
+
+    private static Alert only(AlertManager alerts, AlertType type) {
+        List<Alert> matching = alerts.history().stream().filter(a -> a.type() == type).toList();
+        assertEquals(1, matching.size(), type + " in " + alerts.history());
+        return matching.get(0);
     }
 }

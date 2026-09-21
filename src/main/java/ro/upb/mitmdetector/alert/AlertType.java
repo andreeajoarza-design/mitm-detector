@@ -7,5 +7,11 @@ public enum AlertType {
     /** The Ethernet source address differs from the sender hardware address inside the ARP payload. */
     ARP_HEADER_MISMATCH,
     /** Many ARP replies arrive from the same host without any matching request. */
-    ARP_UNSOLICITED_FLOOD
+    ARP_UNSOLICITED_FLOOD,
+    /** Two different answers arrived for the same DNS query, so one of them is forged. */
+    DNS_CONFLICTING_RESPONSES,
+    /** A DNS response arrived for a query the client never sent (or sent long ago). */
+    DNS_UNSOLICITED_RESPONSE,
+    /** A name that always resolved to public addresses suddenly resolves to a private one. */
+    DNS_ANSWER_CHANGED
 }
