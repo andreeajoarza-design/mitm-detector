@@ -6,3 +6,7 @@
 .vscode/
 Thumbs.db
 .DS_Store
+
+Claude outputs/
+old-drafts/
+alerts.log
