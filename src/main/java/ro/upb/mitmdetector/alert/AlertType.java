@@ -13,5 +13,11 @@ public enum AlertType {
     /** A DNS response arrived for a query the client never sent (or sent long ago). */
     DNS_UNSOLICITED_RESPONSE,
     /** A name that always resolved to public addresses suddenly resolves to a private one. */
-    DNS_ANSWER_CHANGED
+    DNS_ANSWER_CHANGED,
+    /** A DHCP server that is not the known one answers clients, or someone answers with the known server's IP but another MAC. */
+    DHCP_ROGUE_SERVER,
+    /** Two different DHCP servers answer the same client request with different gateway or DNS settings. */
+    DHCP_CONFLICTING_OFFERS,
+    /** A known DHCP server suddenly hands out a different gateway or DNS server. */
+    DHCP_CONFIG_CHANGED
 }

@@ -7,6 +7,7 @@ import ro.upb.mitmdetector.alert.AlertType;
 import ro.upb.mitmdetector.alert.Severity;
 import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
+import ro.upb.mitmdetector.detector.DhcpDetector;
 import ro.upb.mitmdetector.detector.DnsDetector;
 
 import java.net.URISyntaxException;
@@ -26,12 +27,14 @@ class PcapReplayTest {
 
     private static final String ATTACKER_MAC = "cc:cc:cc:cc:cc:66";
     private static final String GATEWAY_IP = "192.168.1.1";
+    private static final String ATTACKER_IP = "192.168.1.66";
 
     private static AlertManager replay(String resource) throws Exception {
         AlertManager alerts = new AlertManager();
         try (PacketCaptureEngine engine = PacketCaptureEngine.forFile(pathOf(resource))) {
             engine.addDetector(new ArpDetector(alerts));
             engine.addDetector(new DnsDetector(alerts));
+            engine.addDetector(new DhcpDetector(alerts));
             engine.start();
             engine.awaitCompletion();
             assertTrue(engine.packetCount() > 0, "no packets were read from " + resource);
@@ -93,6 +96,32 @@ class PcapReplayTest {
         Alert unsolicited = only(alerts, AlertType.DNS_UNSOLICITED_RESPONSE);
         assertEquals(Severity.MEDIUM, unsolicited.severity());
         assertEquals(ATTACKER_MAC, unsolicited.sourceMac());
+    }
+
+    @Test
+    void normalDhcpTrafficProducesNoAlerts() throws Exception {
+        AlertManager alerts = replay("/pcap/normal_dhcp.pcap");
+        assertTrue(alerts.history().isEmpty(), "unexpected alerts: " + alerts.history());
+    }
+
+    @Test
+    void rogueDhcpServerIsDetected() throws Exception {
+        AlertManager alerts = replay("/pcap/dhcp_rogue.pcap");
+        assertEquals(3, alerts.history().size(), "history: " + alerts.history());
+
+        Alert conflict = only(alerts, AlertType.DHCP_CONFLICTING_OFFERS);
+        assertEquals(Severity.CRITICAL, conflict.severity());
+        assertEquals(ATTACKER_IP, conflict.sourceIp());
+        assertEquals(ATTACKER_MAC, conflict.sourceMac());
+
+        List<Alert> rogue = alerts.history().stream()
+                .filter(a -> a.type() == AlertType.DHCP_ROGUE_SERVER).toList();
+        assertEquals(2, rogue.size(), "history: " + alerts.history());
+        assertEquals(Severity.HIGH, rogue.get(0).severity());          // the second server
+        assertEquals(ATTACKER_IP, rogue.get(0).sourceIp());
+        assertEquals(Severity.CRITICAL, rogue.get(1).severity());      // the real server's IP from another MAC
+        assertEquals(GATEWAY_IP, rogue.get(1).sourceIp());
+        assertEquals(ATTACKER_MAC, rogue.get(1).sourceMac());
     }
 
     private static Alert only(AlertManager alerts, AlertType type) {

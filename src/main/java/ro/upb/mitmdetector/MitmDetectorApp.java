@@ -7,10 +7,13 @@ import ro.upb.mitmdetector.alert.ConsoleAlertListener;
 import ro.upb.mitmdetector.alert.FileAlertListener;
 import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
+import ro.upb.mitmdetector.detector.DhcpDetector;
 import ro.upb.mitmdetector.detector.DnsDetector;
 
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +25,8 @@ import java.util.concurrent.TimeUnit;
  *   --list                 print the capture interfaces with their index
  *   --interface &lt;index&gt;    capture live on that interface until Ctrl+C
  *   --pcap &lt;file&gt;          replay a saved capture
+ *   --dhcp-servers &lt;ip,ip&gt; optional, after the two arguments above: the legitimate DHCP servers
+ *                          (without it, the first DHCP server seen is taken as the legitimate one)
  * </pre>
  * Alerts go to the console and to alerts.log in the working directory.
  */
@@ -62,6 +67,7 @@ public final class MitmDetectorApp {
 
         engine.addDetector(new ArpDetector(alerts));
         engine.addDetector(new DnsDetector(alerts));
+        engine.addDetector(new DhcpDetector(alerts, trustedDhcpServers(args)));
 
         Runtime.getRuntime().addShutdownHook(new Thread(engine::close));
         engine.start();
@@ -91,6 +97,21 @@ public final class MitmDetectorApp {
                 .formatted(engine.packetCount(), engine.arpPacketCount(), alerts.history().size());
     }
 
+    /** Reads the optional "--dhcp-servers ip,ip" argument. Empty set means: learn the server from traffic. */
+    private static Set<String> trustedDhcpServers(String[] args) {
+        Set<String> trusted = new HashSet<>();
+        for (int i = 2; i + 1 < args.length; i++) {
+            if (args[i].equals("--dhcp-servers")) {
+                for (String address : args[i + 1].split(",")) {
+                    if (!address.isBlank()) {
+                        trusted.add(address.trim());
+                    }
+                }
+            }
+        }
+        return trusted;
+    }
+
     private static PcapNetworkInterface pickInterface(String indexText) throws PcapNativeException {
         List<PcapNetworkInterface> all = PacketCaptureEngine.listInterfaces();
         int index = Integer.parseInt(indexText);
@@ -108,6 +129,6 @@ public final class MitmDetectorApp {
     }
 
     private static void usage() {
-        System.out.println("Usage: --list | --interface <index> | --pcap <file>");
+        System.out.println("Usage: --list | --interface <index> | --pcap <file> [--dhcp-servers <ip,ip>]");
     }
 }

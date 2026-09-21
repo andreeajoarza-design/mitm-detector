@@ -8,6 +8,8 @@ Output (overwritten on every run, no external libraries needed):
     src/test/resources/pcap/arp_spoofing.pcap
     src/test/resources/pcap/normal_dns.pcap
     src/test/resources/pcap/dns_spoofing.pcap
+    src/test/resources/pcap/normal_dhcp.pcap
+    src/test/resources/pcap/dhcp_rogue.pcap
 
 Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
 Timestamps are fixed (2026-01-01 10:00:00 UTC) so every run gives identical files.
@@ -171,9 +173,85 @@ def dns_spoofing_traffic():
     return packets
 
 
+# ---------------------------------------------------------------------------
+# DHCP captures. The real server is the gateway 192.168.1.1, the rogue one is the attacker .66.
+# ---------------------------------------------------------------------------
+
+DHCP_DISCOVER, DHCP_OFFER, DHCP_REQUEST, DHCP_ACK = 1, 2, 3, 5
+
+
+def dhcp_option(code, data):
+    return bytes([code, len(data)]) + data
+
+
+def dhcp_payload(op, xid, client_mac, msg_type, server_ip=None, yiaddr="0.0.0.0", routers=(), dns=()):
+    fixed = struct.pack("!BBBBIHH4s4s4s4s16s64s128s", op, 1, 6, 0, xid, 0, 0x8000,
+                        ip("0.0.0.0"), ip(yiaddr), ip("0.0.0.0"), ip("0.0.0.0"),
+                        mac(client_mac) + b"\x00" * 10, b"\x00" * 64, b"\x00" * 128)
+    options = dhcp_option(53, bytes([msg_type]))
+    if server_ip:
+        options += dhcp_option(54, ip(server_ip))
+    if routers:
+        options += dhcp_option(3, b"".join(ip(r) for r in routers))
+    if dns:
+        options += dhcp_option(6, b"".join(ip(d) for d in dns))
+    return fixed + bytes([0x63, 0x82, 0x53, 0x63]) + options + b"\xff"
+
+
+def dhcp_from_client(t, xid, client_mac, msg_type, server_ip=None):
+    payload = dhcp_payload(1, xid, client_mac, msg_type, server_ip)
+    return (t, udp_frame(client_mac, BROADCAST_MAC, "0.0.0.0", "255.255.255.255", 68, 67, payload))
+
+
+def dhcp_from_server(t, xid, client_mac, msg_type, server, yiaddr, routers, dns, eth_src=None):
+    """A broadcast reply that claims to come from server (ip, mac); eth_src overrides the MAC it is sent from."""
+    payload = dhcp_payload(2, xid, client_mac, msg_type, server[0], yiaddr, routers, dns)
+    return (t, udp_frame(eth_src or server[1], BROADCAST_MAC, server[0], "255.255.255.255", 67, 68, payload))
+
+
+def dhcp_exchange(t, xid, client_mac, yiaddr):
+    """DISCOVER, OFFER, REQUEST, ACK with the real server."""
+    settings = ([GATEWAY[0]], [GATEWAY[0]])
+    return [
+        dhcp_from_client(t, xid, client_mac, DHCP_DISCOVER),
+        dhcp_from_server(t + 0.02, xid, client_mac, DHCP_OFFER, GATEWAY, yiaddr, *settings),
+        dhcp_from_client(t + 0.5, xid, client_mac, DHCP_REQUEST, GATEWAY[0]),
+        dhcp_from_server(t + 0.52, xid, client_mac, DHCP_ACK, GATEWAY, yiaddr, *settings),
+    ]
+
+
+def normal_dhcp_traffic():
+    packets = []
+    packets += dhcp_exchange(0, 0x3001, VICTIM[1], "192.168.1.100")
+    packets += dhcp_exchange(20, 0x3002, "dd:dd:dd:dd:dd:20", "192.168.1.101")
+    return packets
+
+
+def dhcp_rogue_traffic():
+    packets = []
+    packets += dhcp_exchange(0, 0x4001, VICTIM[1], "192.168.1.100")      # the detector learns the real server
+    # t=30: the victim asks again. The rogue server answers 15 ms before the real one, naming itself
+    # as gateway and DNS server, and the client picks the first offer it receives.
+    xid = 0x4002
+    packets.append(dhcp_from_client(30, xid, VICTIM[1], DHCP_DISCOVER))
+    packets.append(dhcp_from_server(30.005, xid, VICTIM[1], DHCP_OFFER, ATTACKER, "192.168.1.150",
+                                    [ATTACKER[0]], [ATTACKER[0]]))
+    packets.append(dhcp_from_server(30.020, xid, VICTIM[1], DHCP_OFFER, GATEWAY, "192.168.1.100",
+                                    [GATEWAY[0]], [GATEWAY[0]]))
+    packets.append(dhcp_from_client(30.5, xid, VICTIM[1], DHCP_REQUEST, ATTACKER[0]))
+    packets.append(dhcp_from_server(30.52, xid, VICTIM[1], DHCP_ACK, ATTACKER, "192.168.1.150",
+                                    [ATTACKER[0]], [ATTACKER[0]]))
+    # t=50: a reply that copies the real server's IP address but is sent from the attacker's MAC.
+    packets.append(dhcp_from_server(50, 0x4003, VICTIM[1], DHCP_OFFER, GATEWAY, "192.168.1.151",
+                                    [ATTACKER[0]], [ATTACKER[0]], eth_src=ATTACKER[1]))
+    return packets
+
+
 if __name__ == "__main__":
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "resources", "pcap")
     write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "arp_spoofing.pcap")), spoofing_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "normal_dns.pcap")), normal_dns_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "dns_spoofing.pcap")), dns_spoofing_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "normal_dhcp.pcap")), normal_dhcp_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "dhcp_rogue.pcap")), dhcp_rogue_traffic())
