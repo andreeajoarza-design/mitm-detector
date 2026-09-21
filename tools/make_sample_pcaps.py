@@ -12,12 +12,16 @@ Output (overwritten on every run, no external libraries needed):
     src/test/resources/pcap/dhcp_rogue.pcap
     src/test/resources/pcap/normal_http.pcap
     src/test/resources/pcap/http_sslstrip.pcap
+    src/test/resources/pcap/ml_baseline.pcap
+    src/test/resources/pcap/ml_arp_flood.pcap
 
 Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
 The HTTP captures also use three web servers outside the LAN (documentation address ranges).
 Timestamps are fixed (2026-01-01 10:00:00 UTC) so every run gives identical files.
 """
+import math
 import os
+import random
 import struct
 from datetime import datetime, timezone
 
@@ -61,8 +65,9 @@ def write_pcap(path, packets):
         # magic, version 2.4, timezone, sigfigs, snaplen, link type 1 = Ethernet
         f.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1))
         for seconds, frame in sorted(packets, key=lambda p: p[0]):
-            whole = int(seconds)
-            micro = int(round((seconds - whole) * 1_000_000))
+            # Whole microseconds first, then split: rounding the fraction alone can give 1_000_000,
+            # which is not a valid microsecond field.
+            whole, micro = divmod(int(round(seconds * 1_000_000)), 1_000_000)
             f.write(struct.pack("<IIII", T0 + whole, micro, len(frame), len(frame)))
             f.write(frame)
     print(f"{path}: {len(packets)} packets")
@@ -332,6 +337,52 @@ def http_sslstrip_traffic():
     return packets
 
 
+# ---- Anomaly detector (Isolation Forest) ------------------------------------------------------------
+
+DNS_NAMES = ["www.example.com", "mail.example.com", "cdn.example.net", "api.example.org", "news.example.org"]
+
+
+def exponential(rng, mean, cap):
+    return min(cap, int(-math.log(1 - rng.random()) * mean))
+
+
+def quiet_network_traffic(seconds, seed):
+    """Traffic of a quiet home network in 10 s windows: a few DNS lookups and web responses in every
+    window (with the odd browsing burst), and an ARP exchange in about one window in seven."""
+    rng = random.Random(seed)
+    packets = []
+    txid = 0x5000
+    for window in range(seconds // 10):
+        t = window * 10 + 0.5
+        if rng.random() < 0.15:
+            packets.append((t, request(VICTIM, GATEWAY[0])))
+            packets.append((t + 0.01, reply(GATEWAY, VICTIM)))
+            t += 0.5
+        for _ in range(exponential(rng, 4, 30)):
+            txid += 1
+            name = DNS_NAMES[txid % len(DNS_NAMES)]
+            packets += lookup(t, txid, name, ["198.51.100.7"])
+            t += 0.05
+        for _ in range(exponential(rng, 3, 20)):
+            packets.append(http_reply(t, 51000 + rng.randrange(1000), NEWS, "HTTP/1.1 200 OK",
+                                      ["Content-Type: image/png"], b"\x89PNG" + bytes(40)))
+            t += 0.05
+    return packets
+
+
+def ml_baseline_traffic():
+    return quiet_network_traffic(600, seed=11)
+
+
+def ml_arp_flood_traffic():
+    packets = quiet_network_traffic(300, seed=12)
+    # t=200: the attacker sends 40 ARP replies in 5 seconds, announcing six addresses as its own MAC.
+    for i in range(40):
+        announced = ("192.168.1.%d" % (1 + i % 6), ATTACKER[1])
+        packets.append((200 + i * 0.125, reply(announced, VICTIM)))
+    return packets
+
+
 if __name__ == "__main__":
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "resources", "pcap")
     write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic())
@@ -342,3 +393,5 @@ if __name__ == "__main__":
     write_pcap(os.path.normpath(os.path.join(root, "dhcp_rogue.pcap")), dhcp_rogue_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "normal_http.pcap")), normal_http_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "http_sslstrip.pcap")), http_sslstrip_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "ml_baseline.pcap")), ml_baseline_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "ml_arp_flood.pcap")), ml_arp_flood_traffic())

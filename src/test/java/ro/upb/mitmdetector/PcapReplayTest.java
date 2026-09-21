@@ -9,10 +9,14 @@ import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
 import ro.upb.mitmdetector.detector.DhcpDetector;
 import ro.upb.mitmdetector.detector.DnsDetector;
+import ro.upb.mitmdetector.detector.Detector;
 import ro.upb.mitmdetector.detector.HttpDetector;
+import ro.upb.mitmdetector.ml.AnomalyDetector;
+import ro.upb.mitmdetector.ml.TrafficWindows;
 
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,18 +34,30 @@ class PcapReplayTest {
     private static final String GATEWAY_IP = "192.168.1.1";
     private static final String ATTACKER_IP = "192.168.1.66";
 
+    /** Replays a capture through the four rule-based detectors. */
     private static AlertManager replay(String resource) throws Exception {
         AlertManager alerts = new AlertManager();
+        run(resource, new ArpDetector(alerts), new DnsDetector(alerts), new DhcpDetector(alerts),
+                new HttpDetector(alerts));
+        return alerts;
+    }
+
+    private static void run(String resource, Detector... detectors) throws Exception {
         try (PacketCaptureEngine engine = PacketCaptureEngine.forFile(pathOf(resource))) {
-            engine.addDetector(new ArpDetector(alerts));
-            engine.addDetector(new DnsDetector(alerts));
-            engine.addDetector(new DhcpDetector(alerts));
-            engine.addDetector(new HttpDetector(alerts));
+            for (Detector detector : detectors) {
+                engine.addDetector(detector);
+            }
             engine.start();
             engine.awaitCompletion();
             assertTrue(engine.packetCount() > 0, "no packets were read from " + resource);
         }
-        return alerts;
+    }
+
+    /** The feature windows of a capture of normal traffic, the way --train collects them. */
+    private static double[][] baselineFrom(String resource) throws Exception {
+        List<double[]> rows = new ArrayList<>();
+        run(resource, new TrafficWindows(sample -> rows.add(sample.features())));
+        return rows.toArray(new double[0][]);
     }
 
     private static String pathOf(String resource) throws URISyntaxException {
@@ -146,6 +162,25 @@ class PcapReplayTest {
         assertEquals(Severity.CRITICAL, redirect.severity());
         assertEquals("203.0.113.20", redirect.sourceIp());
         assertEquals(ATTACKER_MAC, redirect.sourceMac());
+    }
+
+    @Test
+    void anomalyDetectorAcceptsTheTrafficItWasTrainedOn() throws Exception {
+        AlertManager alerts = new AlertManager();
+        run("/pcap/ml_baseline.pcap", new AnomalyDetector(alerts, baselineFrom("/pcap/ml_baseline.pcap")));
+        assertTrue(alerts.history().isEmpty(), "unexpected alerts: " + alerts.history());
+    }
+
+    @Test
+    void anomalyDetectorFlagsAnArpFlood() throws Exception {
+        AlertManager alerts = new AlertManager();
+        run("/pcap/ml_arp_flood.pcap", new AnomalyDetector(alerts, baselineFrom("/pcap/ml_baseline.pcap")));
+
+        Alert anomaly = only(alerts, AlertType.ML_ANOMALY);
+        assertEquals(1, alerts.history().size(), "history: " + alerts.history());
+        assertEquals(Severity.MEDIUM, anomaly.severity());
+        assertEquals(ATTACKER_MAC, anomaly.sourceMac());
+        assertTrue(anomaly.message().contains("arpReplies 40"), anomaly.message());
     }
 
     private static Alert only(AlertManager alerts, AlertType type) {

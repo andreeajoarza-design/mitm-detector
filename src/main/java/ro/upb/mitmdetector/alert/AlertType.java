@@ -23,5 +23,7 @@ public enum AlertType {
     /** A host that redirects plain HTTP to HTTPS answers a plain HTTP request with an HTML page instead. */
     HTTP_DOWNGRADE_PAGE,
     /** A host known to use HTTPS answers a plain HTTP request with a redirect to http://. */
-    HTTP_DOWNGRADE_REDIRECT
+    HTTP_DOWNGRADE_REDIRECT,
+    /** The traffic of one sender in a time window is unlike anything in the baseline of normal traffic. */
+    ML_ANOMALY
 }

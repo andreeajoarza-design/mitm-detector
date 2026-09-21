@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
  * Builds Ethernet/IPv4/UDP/DNS frames byte by byte for tests, without touching the network.
  * The frame is then decoded by Pcap4J exactly as a captured one would be.
  */
-final class DnsTestPackets {
+public final class DnsTestPackets {
 
     private DnsTestPackets() { }
 
@@ -29,7 +29,7 @@ final class DnsTestPackets {
     }
 
     /** Any UDP datagram with the given payload. */
-    static Packet udp(String srcMac, String dstMac, String srcIp, String dstIp,
+    public static Packet udp(String srcMac, String dstMac, String srcIp, String dstIp,
                       int srcPort, int dstPort, byte[] payload) {
         int udpLength = 8 + payload.length;
         ByteBuffer frame = ByteBuffer.allocate(14 + 20 + udpLength);

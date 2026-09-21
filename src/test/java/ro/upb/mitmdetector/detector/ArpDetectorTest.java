@@ -129,6 +129,24 @@ class ArpDetectorTest {
     }
 
     @Test
+    void floodAnnouncingManyAddressesIsOneAlert() {
+        // Ten replies in ten seconds from one MAC, each for a different IP address.
+        for (int i = 0; i < 10; i++) {
+            detector.inspect(reply(ATTACKER_MAC, "192.168.1." + (100 + i), VICTIM_MAC, VICTIM_IP), at(i));
+        }
+        assertEquals(1, ofType(AlertType.ARP_UNSOLICITED_FLOOD).size());
+    }
+
+    @Test
+    void floodThatKeepsGoingIsReportedAgainAfterOneWindow() {
+        for (int i = 0; i < 25; i++) {
+            detector.inspect(reply(ATTACKER_MAC, "192.168.1." + (100 + i), VICTIM_MAC, VICTIM_IP), at(i));
+        }
+        // First alert at the 5th reply (t=4 s), then every 10 s while the flood lasts: t=14 s and t=24 s.
+        assertEquals(3, ofType(AlertType.ARP_UNSOLICITED_FLOOD).size());
+    }
+
+    @Test
     void fewUnsolicitedRepliesAreTolerated() {
         // One gratuitous reply, e.g. a host booting up.
         detector.inspect(reply(GATEWAY_MAC, GATEWAY_IP, GATEWAY_MAC, GATEWAY_IP), at(0));

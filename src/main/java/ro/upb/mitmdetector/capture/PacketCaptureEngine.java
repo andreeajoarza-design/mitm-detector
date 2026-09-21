@@ -101,6 +101,14 @@ public final class PacketCaptureEngine implements AutoCloseable {
             Thread.currentThread().interrupt();
         } catch (PcapNativeException | NotOpenException e) {
             System.err.println("Capture stopped: " + e.getMessage());
+        } finally {
+            for (Detector detector : detectors) {
+                try {
+                    detector.flush();
+                } catch (RuntimeException e) {
+                    System.err.println(detector.getClass().getSimpleName() + " failed: " + e);
+                }
+            }
         }
     }
 

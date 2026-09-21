@@ -62,6 +62,8 @@ public final class ArpDetector implements Detector {
     private final Map<MacAddress, Set<String>> ipsByMac = new HashMap<>();
     private final Map<RequestKey, Instant> pendingRequests = new HashMap<>();
     private final Map<MacAddress, Deque<Instant>> unsolicitedReplies = new HashMap<>();
+    /** When a flood alert was last raised for a MAC, so that one flood gives one alert per window. */
+    private final Map<MacAddress, Instant> lastFloodAlert = new HashMap<>();
 
     public ArpDetector(AlertManager alerts) {
         this.alerts = alerts;
@@ -144,7 +146,12 @@ public final class ArpDetector implements Detector {
         while (!recent.isEmpty() && Duration.between(recent.peekFirst(), ts).compareTo(UNSOLICITED_WINDOW) > 0) {
             recent.removeFirst();
         }
-        if (recent.size() >= UNSOLICITED_THRESHOLD) {
+        Instant lastAlert = lastFloodAlert.get(replierMac);
+        boolean alertedRecently = lastAlert != null
+                && Duration.between(lastAlert, ts).compareTo(UNSOLICITED_WINDOW) < 0;
+        // The alert is per sender MAC, not per announced IP: a flood that announces many addresses is one event.
+        if (recent.size() >= UNSOLICITED_THRESHOLD && !alertedRecently) {
+            lastFloodAlert.put(replierMac, ts);
             alerts.raise(new Alert(ts, AlertType.ARP_UNSOLICITED_FLOOD, Severity.MEDIUM,
                     "%d ARP replies without a request in %d s from this host"
                             .formatted(recent.size(), UNSOLICITED_WINDOW.toSeconds()),

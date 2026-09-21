@@ -8,7 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
 /** Builds Ethernet/IPv4/TCP frames carrying HTTP text for tests. */
-final class HttpTestPackets {
+public final class HttpTestPackets {
 
     private HttpTestPackets() { }
 
@@ -37,7 +37,7 @@ final class HttpTestPackets {
     }
 
     /** Any TCP segment with the given payload. */
-    static Packet tcp(String srcMac, String dstMac, String srcIp, String dstIp,
+    public static Packet tcp(String srcMac, String dstMac, String srcIp, String dstIp,
                       int srcPort, int dstPort, byte[] payload) {
         int tcpLength = 20 + payload.length;
         ByteBuffer frame = ByteBuffer.allocate(14 + 20 + tcpLength);
@@ -58,7 +58,7 @@ final class HttpTestPackets {
         }
     }
 
-    static byte[] bytes(String text) {
+    public static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.ISO_8859_1);
     }
 
