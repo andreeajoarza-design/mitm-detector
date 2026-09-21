@@ -10,8 +10,11 @@ Output (overwritten on every run, no external libraries needed):
     src/test/resources/pcap/dns_spoofing.pcap
     src/test/resources/pcap/normal_dhcp.pcap
     src/test/resources/pcap/dhcp_rogue.pcap
+    src/test/resources/pcap/normal_http.pcap
+    src/test/resources/pcap/http_sslstrip.pcap
 
 Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
+The HTTP captures also use three web servers outside the LAN (documentation address ranges).
 Timestamps are fixed (2026-01-01 10:00:00 UTC) so every run gives identical files.
 """
 import os
@@ -247,6 +250,88 @@ def dhcp_rogue_traffic():
     return packets
 
 
+# ---- HTTP (plain port 80, for the SSL stripping detector) ----------------------------------------
+
+SHOP = ("203.0.113.10", "shop.example.net")      # redirects plain HTTP to HTTPS
+BANK = ("203.0.113.20", "bank.example.net")      # redirects plain HTTP to HTTPS
+NEWS = ("198.51.100.20", "news.example.org")     # only speaks plain HTTP
+
+
+def tcp_checksum(src_ip, dst_ip, segment):
+    pseudo = ip(src_ip) + ip(dst_ip) + struct.pack("!BBH", 0, 6, len(segment))
+    data = pseudo + segment + (b"\x00" if len(segment) % 2 else b"")
+    return ipv4_checksum(data)
+
+
+def tcp_frame(eth_src, eth_dst, src_ip, dst_ip, src_port, dst_port, seq, ack, flags, payload):
+    segment = struct.pack("!HHIIBBHHH", src_port, dst_port, seq, ack, 0x50, flags, 65535, 0, 0) + payload
+    segment = segment[:16] + struct.pack("!H", tcp_checksum(src_ip, dst_ip, segment)) + segment[18:]
+    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(segment), 0, 0x4000, 64, 6, 0, ip(src_ip), ip(dst_ip))
+    header = header[:10] + struct.pack("!H", ipv4_checksum(header)) + header[12:]
+    frame = mac(eth_dst) + mac(eth_src) + struct.pack("!H", 0x0800) + header + segment
+    return frame + b"\x00" * max(0, 60 - len(frame))
+
+
+PSH_ACK = 0x18
+ACK = 0x10
+
+
+def http_get(t, port, server, host, path):
+    text = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\n\r\n"
+    return (t, tcp_frame(VICTIM[1], GATEWAY[1], VICTIM[0], server[0], port, 80, 1000, 5000, PSH_ACK,
+                         text.encode("ascii")))
+
+
+def http_reply(t, port, server, status_line, headers, body=b"", sender_mac=GATEWAY[1]):
+    """A response that claims to come from the web server, sent by the machine with sender_mac."""
+    lines = [status_line] + headers + [f"Content-Length: {len(body)}", "Connection: close"]
+    payload = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii") + body
+    return (t, tcp_frame(sender_mac, VICTIM[1], server[0], VICTIM[0], 80, port, 5000, 1000 + 100, PSH_ACK, payload))
+
+
+def http_ack(t, port, server):
+    return (t, tcp_frame(VICTIM[1], GATEWAY[1], VICTIM[0], server[0], port, 80, 1100, 5300, ACK, b""))
+
+
+def https_redirect(t, port, server, status_line="HTTP/1.1 301 Moved Permanently", sender_mac=GATEWAY[1]):
+    return http_reply(t, port, server, status_line, [f"Location: https://{server[1]}/"], sender_mac=sender_mac)
+
+
+PAGE = b"<html><body><form action='/login'>...</form></body></html>"
+
+
+def normal_http_traffic():
+    packets = []
+    packets += [http_get(0, 51000, SHOP, SHOP[1], "/"), https_redirect(0.03, 51000, SHOP), http_ack(0.031, 51000, SHOP)]
+    packets += [http_get(5, 51001, BANK, BANK[1], "/"),
+                https_redirect(5.03, 51001, BANK, "HTTP/1.1 302 Found")]
+    # A site that has no HTTPS at all: a plain page is normal for it.
+    packets += [http_get(10, 51002, NEWS, NEWS[1], "/"),
+                http_reply(10.04, 51002, NEWS, "HTTP/1.1 200 OK", ["Content-Type: text/html; charset=utf-8"], PAGE)]
+    # A picture fetched over plain HTTP from a site that otherwise redirects: not a page, so not a sign.
+    packets += [http_get(20, 51003, SHOP, SHOP[1], "/logo.png"),
+                http_reply(20.03, 51003, SHOP, "HTTP/1.1 200 OK", ["Content-Type: image/png"], b"\x89PNG....")]
+    packets += [http_get(30, 51004, SHOP, SHOP[1], "/"), https_redirect(30.03, 51004, SHOP)]
+    return packets
+
+
+def http_sslstrip_traffic():
+    packets = []
+    # Before the attack: the detector sees both sites redirecting to HTTPS.
+    packets += [http_get(0, 51000, SHOP, SHOP[1], "/"), https_redirect(0.03, 51000, SHOP)]
+    packets += [http_get(5, 51001, BANK, BANK[1], "/"), https_redirect(5.03, 51001, BANK, "HTTP/1.1 302 Found")]
+    # t=30: the attacker sits in the path (for example after ARP poisoning) and answers the same request
+    # with the page itself, fetched over HTTPS on its own and handed over as plain HTTP.
+    packets += [http_get(30, 51002, SHOP, SHOP[1], "/"),
+                http_reply(30.05, 51002, SHOP, "HTTP/1.1 200 OK", ["Content-Type: text/html; charset=utf-8"], PAGE,
+                           sender_mac=ATTACKER[1])]
+    # t=45: for the bank, the attacker turns the redirect to HTTPS into a redirect to HTTP.
+    packets += [http_get(45, 51003, BANK, BANK[1], "/login"),
+                http_reply(45.05, 51003, BANK, "HTTP/1.1 302 Found", [f"Location: http://www.{BANK[1]}/login"],
+                           sender_mac=ATTACKER[1])]
+    return packets
+
+
 if __name__ == "__main__":
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "resources", "pcap")
     write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic())
@@ -255,3 +340,5 @@ if __name__ == "__main__":
     write_pcap(os.path.normpath(os.path.join(root, "dns_spoofing.pcap")), dns_spoofing_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "normal_dhcp.pcap")), normal_dhcp_traffic())
     write_pcap(os.path.normpath(os.path.join(root, "dhcp_rogue.pcap")), dhcp_rogue_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "normal_http.pcap")), normal_http_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "http_sslstrip.pcap")), http_sslstrip_traffic())

@@ -9,6 +9,7 @@ import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
 import ro.upb.mitmdetector.detector.DhcpDetector;
 import ro.upb.mitmdetector.detector.DnsDetector;
+import ro.upb.mitmdetector.detector.HttpDetector;
 
 import java.net.URISyntaxException;
 import java.nio.file.Path;
@@ -35,6 +36,7 @@ class PcapReplayTest {
             engine.addDetector(new ArpDetector(alerts));
             engine.addDetector(new DnsDetector(alerts));
             engine.addDetector(new DhcpDetector(alerts));
+            engine.addDetector(new HttpDetector(alerts));
             engine.start();
             engine.awaitCompletion();
             assertTrue(engine.packetCount() > 0, "no packets were read from " + resource);
@@ -122,6 +124,28 @@ class PcapReplayTest {
         assertEquals(Severity.CRITICAL, rogue.get(1).severity());      // the real server's IP from another MAC
         assertEquals(GATEWAY_IP, rogue.get(1).sourceIp());
         assertEquals(ATTACKER_MAC, rogue.get(1).sourceMac());
+    }
+
+    @Test
+    void normalHttpTrafficProducesNoAlerts() throws Exception {
+        AlertManager alerts = replay("/pcap/normal_http.pcap");
+        assertTrue(alerts.history().isEmpty(), "unexpected alerts: " + alerts.history());
+    }
+
+    @Test
+    void sslStrippingIsDetected() throws Exception {
+        AlertManager alerts = replay("/pcap/http_sslstrip.pcap");
+        assertEquals(2, alerts.history().size(), "history: " + alerts.history());
+
+        Alert page = only(alerts, AlertType.HTTP_DOWNGRADE_PAGE);
+        assertEquals(Severity.CRITICAL, page.severity());
+        assertEquals("203.0.113.10", page.sourceIp());
+        assertEquals(ATTACKER_MAC, page.sourceMac());
+
+        Alert redirect = only(alerts, AlertType.HTTP_DOWNGRADE_REDIRECT);
+        assertEquals(Severity.CRITICAL, redirect.severity());
+        assertEquals("203.0.113.20", redirect.sourceIp());
+        assertEquals(ATTACKER_MAC, redirect.sourceMac());
     }
 
     private static Alert only(AlertManager alerts, AlertType type) {

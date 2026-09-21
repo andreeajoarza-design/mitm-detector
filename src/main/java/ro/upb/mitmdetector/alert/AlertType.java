@@ -19,5 +19,9 @@ public enum AlertType {
     /** Two different DHCP servers answer the same client request with different gateway or DNS settings. */
     DHCP_CONFLICTING_OFFERS,
     /** A known DHCP server suddenly hands out a different gateway or DNS server. */
-    DHCP_CONFIG_CHANGED
+    DHCP_CONFIG_CHANGED,
+    /** A host that redirects plain HTTP to HTTPS answers a plain HTTP request with an HTML page instead. */
+    HTTP_DOWNGRADE_PAGE,
+    /** A host known to use HTTPS answers a plain HTTP request with a redirect to http://. */
+    HTTP_DOWNGRADE_REDIRECT
 }

@@ -9,6 +9,7 @@ import ro.upb.mitmdetector.capture.PacketCaptureEngine;
 import ro.upb.mitmdetector.detector.ArpDetector;
 import ro.upb.mitmdetector.detector.DhcpDetector;
 import ro.upb.mitmdetector.detector.DnsDetector;
+import ro.upb.mitmdetector.detector.HttpDetector;
 
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -27,6 +28,8 @@ import java.util.concurrent.TimeUnit;
  *   --pcap &lt;file&gt;          replay a saved capture
  *   --dhcp-servers &lt;ip,ip&gt; optional, after the two arguments above: the legitimate DHCP servers
  *                          (without it, the first DHCP server seen is taken as the legitimate one)
+ *   --https-hosts &lt;a,b&gt;    optional, after the two arguments above: host names known to require HTTPS
+ *                          (without it, a host is learned once it is seen redirecting to HTTPS)
  * </pre>
  * Alerts go to the console and to alerts.log in the working directory.
  */
@@ -67,7 +70,8 @@ public final class MitmDetectorApp {
 
         engine.addDetector(new ArpDetector(alerts));
         engine.addDetector(new DnsDetector(alerts));
-        engine.addDetector(new DhcpDetector(alerts, trustedDhcpServers(args)));
+        engine.addDetector(new DhcpDetector(alerts, listOption(args, "--dhcp-servers")));
+        engine.addDetector(new HttpDetector(alerts, listOption(args, "--https-hosts")));
 
         Runtime.getRuntime().addShutdownHook(new Thread(engine::close));
         engine.start();
@@ -97,19 +101,19 @@ public final class MitmDetectorApp {
                 .formatted(engine.packetCount(), engine.arpPacketCount(), alerts.history().size());
     }
 
-    /** Reads the optional "--dhcp-servers ip,ip" argument. Empty set means: learn the server from traffic. */
-    private static Set<String> trustedDhcpServers(String[] args) {
-        Set<String> trusted = new HashSet<>();
+    /** Reads an optional "name a,b,c" argument. An empty set means the option was not given. */
+    private static Set<String> listOption(String[] args, String name) {
+        Set<String> values = new HashSet<>();
         for (int i = 2; i + 1 < args.length; i++) {
-            if (args[i].equals("--dhcp-servers")) {
-                for (String address : args[i + 1].split(",")) {
-                    if (!address.isBlank()) {
-                        trusted.add(address.trim());
+            if (args[i].equals(name)) {
+                for (String item : args[i + 1].split(",")) {
+                    if (!item.isBlank()) {
+                        values.add(item.trim());
                     }
                 }
             }
         }
-        return trusted;
+        return values;
     }
 
     private static PcapNetworkInterface pickInterface(String indexText) throws PcapNativeException {
@@ -129,6 +133,6 @@ public final class MitmDetectorApp {
     }
 
     private static void usage() {
-        System.out.println("Usage: --list | --interface <index> | --pcap <file> [--dhcp-servers <ip,ip>]");
+        System.out.println("Usage: --list | --interface <index> | --pcap <file> [--dhcp-servers <ip,ip>] [--https-hosts <a,b>]");
     }
 }
