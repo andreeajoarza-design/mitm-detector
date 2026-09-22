@@ -17,7 +17,7 @@ Output (overwritten on every run, no external libraries needed):
 
 Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
 The HTTP captures also use three web servers outside the LAN (documentation address ranges).
-Timestamps are fixed (2026-01-01 10:00:00 UTC) so every run gives identical files.
+Timestamps are fixed (each capture has its own reference hour) so every run gives identical files.
 """
 import math
 import os
@@ -25,7 +25,8 @@ import random
 import struct
 from datetime import datetime, timezone
 
-T0 = int(datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc).timestamp())
+def base_time(hour, minute=0):
+    return int(datetime(2026, 1, 1, hour, minute, 0, tzinfo=timezone.utc).timestamp())
 
 GATEWAY = ("192.168.1.1", "aa:aa:aa:aa:aa:01")
 VICTIM = ("192.168.1.10", "bb:bb:bb:bb:bb:10")
@@ -59,7 +60,7 @@ def reply(sender, target):
     return arp_frame(2, sender[1], target[1], sender, target[1], target[0])
 
 
-def write_pcap(path, packets):
+def write_pcap(path, packets, t0):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         # magic, version 2.4, timezone, sigfigs, snaplen, link type 1 = Ethernet
@@ -68,7 +69,7 @@ def write_pcap(path, packets):
             # Whole microseconds first, then split: rounding the fraction alone can give 1_000_000,
             # which is not a valid microsecond field.
             whole, micro = divmod(int(round(seconds * 1_000_000)), 1_000_000)
-            f.write(struct.pack("<IIII", T0 + whole, micro, len(frame), len(frame)))
+            f.write(struct.pack("<IIII", t0 + whole, micro, len(frame), len(frame)))
             f.write(frame)
     print(f"{path}: {len(packets)} packets")
 
@@ -385,13 +386,13 @@ def ml_arp_flood_traffic():
 
 if __name__ == "__main__":
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "test", "resources", "pcap")
-    write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "arp_spoofing.pcap")), spoofing_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "normal_dns.pcap")), normal_dns_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "dns_spoofing.pcap")), dns_spoofing_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "normal_dhcp.pcap")), normal_dhcp_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "dhcp_rogue.pcap")), dhcp_rogue_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "normal_http.pcap")), normal_http_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "http_sslstrip.pcap")), http_sslstrip_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "ml_baseline.pcap")), ml_baseline_traffic())
-    write_pcap(os.path.normpath(os.path.join(root, "ml_arp_flood.pcap")), ml_arp_flood_traffic())
+    write_pcap(os.path.normpath(os.path.join(root, "normal_arp.pcap")), normal_traffic(), base_time(9, 15))
+    write_pcap(os.path.normpath(os.path.join(root, "arp_spoofing.pcap")), spoofing_traffic(), base_time(9, 15))
+    write_pcap(os.path.normpath(os.path.join(root, "normal_dns.pcap")), normal_dns_traffic(), base_time(11, 40))
+    write_pcap(os.path.normpath(os.path.join(root, "dns_spoofing.pcap")), dns_spoofing_traffic(), base_time(11, 40))
+    write_pcap(os.path.normpath(os.path.join(root, "normal_dhcp.pcap")), normal_dhcp_traffic(), base_time(14, 5))
+    write_pcap(os.path.normpath(os.path.join(root, "dhcp_rogue.pcap")), dhcp_rogue_traffic(), base_time(14, 5))
+    write_pcap(os.path.normpath(os.path.join(root, "normal_http.pcap")), normal_http_traffic(), base_time(16, 50))
+    write_pcap(os.path.normpath(os.path.join(root, "http_sslstrip.pcap")), http_sslstrip_traffic(), base_time(16, 50))
+    write_pcap(os.path.normpath(os.path.join(root, "ml_baseline.pcap")), ml_baseline_traffic(), base_time(20, 30))
+    write_pcap(os.path.normpath(os.path.join(root, "ml_arp_flood.pcap")), ml_arp_flood_traffic(), base_time(20, 30))
