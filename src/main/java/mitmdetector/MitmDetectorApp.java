@@ -10,6 +10,7 @@ import mitmdetector.detector.ArpDetector;
 import mitmdetector.detector.DhcpDetector;
 import mitmdetector.detector.DnsDetector;
 import mitmdetector.detector.HttpDetector;
+import mitmdetector.detector.IcmpRedirectDetector;
 import mitmdetector.gui.AlertDashboard;
 import mitmdetector.ml.AnomalyDetector;
 import mitmdetector.ml.BaselineFile;
@@ -88,6 +89,7 @@ public final class MitmDetectorApp {
         engine.addDetector(new DnsDetector(alerts));
         engine.addDetector(new DhcpDetector(alerts, listOption(args, "--dhcp-servers")));
         engine.addDetector(new HttpDetector(alerts, listOption(args, "--https-hosts")));
+        engine.addDetector(new IcmpRedirectDetector(alerts));
 
         String baselineFile = option(args, "--baseline");
         if (baselineFile != null) {

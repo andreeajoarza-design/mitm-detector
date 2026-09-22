@@ -11,6 +11,7 @@ import mitmdetector.detector.DhcpDetector;
 import mitmdetector.detector.DnsDetector;
 import mitmdetector.detector.Detector;
 import mitmdetector.detector.HttpDetector;
+import mitmdetector.detector.IcmpRedirectDetector;
 import mitmdetector.ml.AnomalyDetector;
 import mitmdetector.ml.TrafficWindows;
 
@@ -34,11 +35,11 @@ class PcapReplayTest {
     private static final String GATEWAY_IP = "192.168.1.1";
     private static final String ATTACKER_IP = "192.168.1.66";
 
-    /** Replays a capture through the four rule-based detectors. */
+    /** Replays a capture through the five rule-based detectors. */
     private static AlertManager replay(String resource) throws Exception {
         AlertManager alerts = new AlertManager();
         run(resource, new ArpDetector(alerts), new DnsDetector(alerts), new DhcpDetector(alerts),
-                new HttpDetector(alerts));
+                new HttpDetector(alerts), new IcmpRedirectDetector(alerts));
         return alerts;
     }
 
@@ -162,6 +163,28 @@ class PcapReplayTest {
         assertEquals(Severity.CRITICAL, redirect.severity());
         assertEquals("203.0.113.20", redirect.sourceIp());
         assertEquals(ATTACKER_MAC, redirect.sourceMac());
+    }
+
+    @Test
+    void normalIcmpTrafficProducesNoAlerts() throws Exception {
+        AlertManager alerts = replay("/pcap/normal_icmp.pcap");
+        assertTrue(alerts.history().isEmpty(), "unexpected alerts: " + alerts.history());
+    }
+
+    @Test
+    void icmpRedirectIsDetected() throws Exception {
+        AlertManager alerts = replay("/pcap/icmp_redirect.pcap");
+        assertEquals(2, alerts.history().size(), "history: " + alerts.history());
+
+        Alert spoofed = only(alerts, AlertType.ICMP_REDIRECT_SPOOFED_SENDER);
+        assertEquals(Severity.CRITICAL, spoofed.severity());
+        assertEquals(GATEWAY_IP, spoofed.sourceIp());
+        assertEquals(ATTACKER_MAC, spoofed.sourceMac());
+
+        Alert untrusted = only(alerts, AlertType.ICMP_REDIRECT_UNTRUSTED_SENDER);
+        assertEquals(Severity.CRITICAL, untrusted.severity());
+        assertEquals(ATTACKER_IP, untrusted.sourceIp());
+        assertEquals(ATTACKER_MAC, untrusted.sourceMac());
     }
 
     @Test

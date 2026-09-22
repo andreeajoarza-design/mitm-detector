@@ -25,5 +25,9 @@ public enum AlertType {
     /** A host known to use HTTPS answers a plain HTTP request with a redirect to http://. */
     HTTP_DOWNGRADE_REDIRECT,
     /** The traffic of one sender in a time window is unlike anything in the baseline of normal traffic. */
-    ML_ANOMALY
+    ML_ANOMALY,
+    /** An ICMP Redirect claims to be from the known gateway IP but arrives from a different MAC. */
+    ICMP_REDIRECT_SPOOFED_SENDER,
+    /** A host that is not the known gateway sends an ICMP Redirect, naming a new gateway (often itself). */
+    ICMP_REDIRECT_UNTRUSTED_SENDER
 }

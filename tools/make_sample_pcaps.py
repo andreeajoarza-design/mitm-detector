@@ -14,6 +14,8 @@ Output (overwritten on every run, no external libraries needed):
     src/test/resources/pcap/http_sslstrip.pcap
     src/test/resources/pcap/ml_baseline.pcap
     src/test/resources/pcap/ml_arp_flood.pcap
+    src/test/resources/pcap/normal_icmp.pcap
+    src/test/resources/pcap/icmp_redirect.pcap
 
 Network in the captures: 192.168.1.0/24, gateway (and DNS resolver) .1, victim .10, attacker .66.
 The HTTP captures also use three web servers outside the LAN (documentation address ranges).
@@ -256,6 +258,38 @@ def dhcp_rogue_traffic():
     return packets
 
 
+# ---------------------------------------------------------------------------
+# ICMP Redirect captures. The real gateway is 192.168.1.1, the attacker is 192.168.1.66.
+# ---------------------------------------------------------------------------
+
+def icmp_redirect(sender, victim, new_gateway_ip, code=1):
+    """ICMP type 5 (Redirect), code 1 = "redirect for host": sender tells victim to use
+    new_gateway_ip as gateway from now on."""
+    icmp = struct.pack("!BBH", 5, code, 0) + ip(new_gateway_ip)
+    header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(icmp), 0, 0, 64, 1, 0, ip(sender[0]), ip(victim[0]))
+    header = header[:10] + struct.pack("!H", ipv4_checksum(header)) + header[12:]
+    frame = mac(victim[1]) + mac(sender[1]) + struct.pack("!H", 0x0800) + header + icmp
+    return frame + b"\x00" * max(0, 60 - len(frame))
+
+
+def normal_icmp_traffic():
+    packets = []
+    # Two genuine redirects from the real gateway, same MAC both times: nothing suspicious.
+    packets.append((0, icmp_redirect(GATEWAY, VICTIM, "192.168.1.50")))
+    packets.append((20, icmp_redirect(GATEWAY, VICTIM, "192.168.1.51")))
+    return packets
+
+
+def icmp_redirect_traffic():
+    packets = []
+    packets.append((0, icmp_redirect(GATEWAY, VICTIM, "192.168.1.50")))          # learns the real gateway
+    # t=30: claims to be the gateway's IP, but arrives from the attacker's MAC.
+    packets.append((30, icmp_redirect((GATEWAY[0], ATTACKER[1]), VICTIM, ATTACKER[0])))
+    # t=50: the attacker uses its own address and names itself as the new gateway.
+    packets.append((50, icmp_redirect(ATTACKER, VICTIM, ATTACKER[0])))
+    return packets
+
+
 # ---- HTTP (plain port 80, for the SSL stripping detector) ----------------------------------------
 
 SHOP = ("203.0.113.10", "shop.example.net")      # redirects plain HTTP to HTTPS
@@ -396,3 +430,5 @@ if __name__ == "__main__":
     write_pcap(os.path.normpath(os.path.join(root, "http_sslstrip.pcap")), http_sslstrip_traffic(), base_time(16, 50))
     write_pcap(os.path.normpath(os.path.join(root, "ml_baseline.pcap")), ml_baseline_traffic(), base_time(20, 30))
     write_pcap(os.path.normpath(os.path.join(root, "ml_arp_flood.pcap")), ml_arp_flood_traffic(), base_time(20, 30))
+    write_pcap(os.path.normpath(os.path.join(root, "normal_icmp.pcap")), normal_icmp_traffic(), base_time(18, 20))
+    write_pcap(os.path.normpath(os.path.join(root, "icmp_redirect.pcap")), icmp_redirect_traffic(), base_time(18, 20))
